@@ -1,6 +1,6 @@
-name:                spock-template
+name:                spock-starter
 version:             0.1.0.0
-synopsis:            A template for postgresql backed Spock apps.
+synopsis:            A sample project using Spock backed by Postgresql.
 description:         Please see README.md
 homepage:            http://github.com/githubuser/spock-template#readme
 license:             BSD3
@@ -20,27 +20,26 @@ library
                     ,  base-prelude
                     ,  configurator
                     ,  lucid
-                    ,  mtl
                     ,  postgresql-simple
                     ,  Spock >= 0.9
                     ,  text
   default-language:    Haskell2010
 
-executable spock-template-exe
+executable spock-starter-exe
   hs-source-dirs:      app
   main-is:             Main.hs
   ghc-options:         -Wall -O2 -threaded -rtsopts -with-rtsopts=-N
   build-depends:       base
                      , base-prelude
-                     , spock-template
+                     , spock-starter
   default-language:    Haskell2010
 
-test-suite spock-template-test
+test-suite spock-starter-test
   type:                exitcode-stdio-1.0
   hs-source-dirs:      test
   main-is:             Spec.hs
   build-depends:       base
-                     , spock-template
+                     , spock-starter
   ghc-options:         -Wall -O2 -threaded -rtsopts -with-rtsopts=-N
   default-language:    Haskell2010
 
