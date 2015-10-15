@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+dbName="spock-test"
+
+dbUrl="postgres://cgag@localhost:5432/spock-test?sslmode=disable" 
+
+add_migration() {
+  local filename=$1
+  migrate -url "$dbUrl" -path ./migrations create "$filename.go"
+  # scripts/migrate -url "$testDbUrl" -path ./migrations create "$filename.go"
+}
+
+run_migrations_up() {
+  migrate -url "$dbUrl" -path ./migrations up
+  # scripts/migrate -url "$testDbUrl" -path ./migrations up
+}
+
+run_migrations_down() {
+  migrate -url "$dbUrl" -path ./migrations down
+  # scripts/migrate -url "$testDbUrl" -path ./migrations down
+}
+
+command=$1
+
+case $command in
+  up)
+    run_migrations_up
+    ;;
+  down)
+    run_migrations_down
+    ;;
+  add)
+    add_migration "$2"
+    ;;
+  rebuild)
+    dropdb $dbName
+    createdb $dbName
+    run_migrations_up
+    ;;
+  *)
+    echo "unrecognized command $command"
+    exit 1
+esac
