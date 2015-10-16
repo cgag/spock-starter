@@ -15,5 +15,6 @@ cabal.sandbox.config
 *.hp
 .stack-work/
 
+hscope.out
 codex.tags
 TAGS

@@ -18,6 +18,7 @@ import qualified Database.PostgreSQL.Simple.ToField as PG
 import qualified Database.PostgreSQL.Simple.ToRow   as PG
 import qualified Database.PostgreSQL.Simple.FromRow   as PG
 import qualified Database.PostgreSQL.Simple.FromField   as PG
+import Network.Wai.Middleware.Static (staticPolicy, addBase)
 import           Web.Spock.Safe
 
 newtype SessionID = SessionID Int
@@ -30,10 +31,10 @@ data Turtle = Turtle
 data Color = Red | Blue | Orange | Purple deriving Show
 
 instance PG.FromField Color where
-  fromField f mdata = 
+  fromField f mdata =
     case mdata of
       Nothing -> PG.returnError PG.UnexpectedNull f ""
-      Just b -> case T.decodeUtf8 b of
+      Just b  -> case T.decodeUtf8 b of
         "RED"    -> return Red
         "BLUE"   -> return Blue
         "ORANGE" -> return Orange
@@ -79,18 +80,19 @@ mkConnBuilder connInfo =
               }
 
 myapp :: SpockM PG.Connection (Maybe SessionID) () ()
-myapp = do
-    get root $
-      do html "home"
-    get "/init" $
-      do void $ runQuery insertCurtis
-         html "hello"
-    get "/all" $ do
-      turtles <- runQuery getAllTurtles
-      html (foldMap (T.append "<br/>" . T.pack . show) turtles)
-    get "/allColors" $ do
-      colors <- runQuery getAllTurtleColors
-      html (foldMap (T.append "<br/>" . T.pack . show) colors)
+myapp =
+  do middleware (staticPolicy (addBase "public"))
+     get root $
+         do html "home"
+     get "/init" $
+         do void $ runQuery insertCurtis
+            html "hello"
+     get "/all" $
+         do turtles <- runQuery getAllTurtles
+            html (foldMap (T.append "<br/>" . T.pack . show) turtles)
+     get "/allColors" $
+         do colors <- runQuery getAllTurtleColors
+            html (foldMap (T.append "<br/>" . T.pack . show) colors)
 
 serve :: Int -> IO ()
 serve port = do
