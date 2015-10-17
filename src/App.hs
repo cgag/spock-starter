@@ -12,7 +12,9 @@ import           BasePrelude
 import qualified Data.Configurator                  as C
 import           Data.Text                          (Text)
 import qualified Data.Text                          as T
+import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Encoding                          as T
+import Lucid
 import qualified Database.PostgreSQL.Simple         as PG
 import qualified Database.PostgreSQL.Simple.ToField as PG
 import qualified Database.PostgreSQL.Simple.ToRow   as PG
@@ -81,18 +83,19 @@ mkConnBuilder connInfo =
 
 myapp :: SpockM PG.Connection (Maybe SessionID) () ()
 myapp =
-  do middleware (staticPolicy (addBase "public"))
-     get root $
-         do html "home"
-     get "/init" $
-         do void $ runQuery insertCurtis
-            html "hello"
-     get "/all" $
-         do turtles <- runQuery getAllTurtles
-            html (foldMap (T.append "<br/>" . T.pack . show) turtles)
-     get "/allColors" $
-         do colors <- runQuery getAllTurtleColors
-            html (foldMap (T.append "<br/>" . T.pack . show) colors)
+    do middleware (staticPolicy (addBase "public"))
+       get root (lucid $ layout $
+           do p_ "hello"
+              p_ "world")
+       get "/init" $
+           do void $ runQuery insertCurtis
+              html "hello"
+       get "/all" $
+           do turtles <- runQuery getAllTurtles
+              html (foldMap (T.append "<br/>" . T.pack . show) turtles)
+       get "/allColors" $
+           do colors <- runQuery getAllTurtleColors
+              html (foldMap (T.append "<br/>" . T.pack . show) colors)
 
 serve :: Int -> IO ()
 serve port = do
@@ -123,3 +126,10 @@ insertCurtis conn =
   PG.executeMany conn
                  "insert into turtles (name, color) values (?,?)"
                  [Turtle "Raphael" Red, Turtle "Leonardo" Blue]
+
+lucid :: Html () -> SpockAction conn sess state ()
+lucid = html . TL.toStrict . renderText
+
+layout :: Html () -> Html ()
+layout x =  doctypehtml_ $ 
+            do body_ x
