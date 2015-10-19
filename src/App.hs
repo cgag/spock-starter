@@ -21,9 +21,12 @@ import qualified Database.PostgreSQL.Simple.ToRow   as PG
 import qualified Database.PostgreSQL.Simple.FromRow   as PG
 import qualified Database.PostgreSQL.Simple.FromField   as PG
 import Network.Wai.Middleware.Static (staticPolicy, addBase)
-import           Web.Spock.Safe
+import  Web.Spock.Safe hiding (SessionId) -- why does this exist?
+import  Web.Users.Types
+import  Web.Users.Postgresql ()
+import qualified Data.Time as Time
+import Control.Monad.Trans (liftIO)
 
-newtype SessionID = SessionID Int
 
 data Turtle = Turtle
     { t_name  :: Text
@@ -81,26 +84,94 @@ mkConnBuilder connInfo =
                         , pc_keepOpenTime = 60 }
               }
 
-myapp :: SpockM PG.Connection (Maybe SessionID) () ()
+myapp :: SpockM PG.Connection (Maybe SessionId) () ()
 myapp =
-    do middleware (staticPolicy (addBase "public"))
-       get root (lucid $ layout $
-           do p_ "hello"
-              p_ "world")
-       get "/init" $
-           do void $ runQuery insertCurtis
-              html "hello"
-       get "/all" $
-           do turtles <- runQuery getAllTurtles
-              html (foldMap (T.append "<br/>" . T.pack . show) turtles)
-       get "/allColors" $
-           do colors <- runQuery getAllTurtleColors
-              html (foldMap (T.append "<br/>" . T.pack . show) colors)
+  do middleware (staticPolicy (addBase "public"))
+     get root (lucid $ layout $
+         do p_ "hello"
+            p_ "world")
+     get "/init" $
+         do void $ runQuery insertCurtis
+            html "hello"
+     get "/login" (lucid $ layout $
+         form_ [method_ "post", action_ "/login"] $
+            do label_ [Lucid.for_ "email"] "email"
+               input_ [type_ "text", name_ "email"]
+               label_ [Lucid.for_ "pass"] "pass"
+               input_ [type_ "password", name_ "pass"]
+               input_ [type_ "submit"])
+     post "/login" $
+          do email <- param' "email"
+             pass  <- param' "pass"
+             mSessID <- runQuery (\conn -> do
+               now <- Time.getCurrentTime
+               -- 1000 days.  Really need a package for these stupid multiplications
+               authUser conn email (PasswordPlain pass) (3600 * 24 * 1000))
+             msg <- case mSessID of
+                 Just sid -> do writeSession (Just sid)
+                                return ("Created session: " <> show sid)
+                 Nothing  -> return "Failed to create session"
+             lucid (toHtml msg)
+     get "/register" (lucid $ layout $
+         form_ [method_ "post", action_ "/register"] $
+            do label_ [Lucid.for_ "email"] "email"
+               input_ [type_ "text", name_ "email"]
+               label_ [Lucid.for_ "pass"] "pass"
+               input_ [type_ "password", name_ "pass"]
+               input_ [type_ "submit"])
+     post "/register" $
+          do email <- param' "email"
+             pass  <- param' "pass"
+             let user = User { u_name  = email
+                             , u_email = email
+                             , u_password = makePassword (PasswordPlain pass)
+                             , u_active = True
+                             , u_more   = Nothing :: Maybe Integer
+                             }
+             eErrUID <- runQuery (`createUser` user)
+             -- why can't i use a let here?
+             lucid $ layout $ p_ (toHtml $ case eErrUID of
+                Left e -> case e of
+                    UsernameOrEmailAlreadyTaken -> "Email is in use"
+                    InvalidPassword -> "Invalid password"
+                Right uid -> "Successfully created user: " <> show uid)
+     get "/all" $
+         do sess <- readSession
+            -- TODO(cgag): use maybe fn, maybe monad?
+            userStr <- case sess of
+                  Just sid -> do 
+                      mUid <- runQuery (\conn -> verifySession conn sid 0)
+                      case mUid of
+                          Just uid -> 
+                              do liftIO $ print ("loking up user: " <> show uid)
+                                 -- should make a newtype or alias for our concrete
+                                 -- user type. If getUserById fails to parse the more field,
+                                 -- we jsut get nothing here.
+                                 mUser :: Maybe (User (Maybe Integer)) <- runQuery (`getUserById` uid) 
+                                 liftIO $ print mUser
+                                 case mUser of 
+                                    Just user -> return (T.pack . show $ user)
+                                    Nothing -> return "fuck, no user with this id"
+                          Nothing -> return "no user"
+                  Nothing -> return "invalid session"
+            turtles <- runQuery getAllTurtles
+            let text = foldMap (T.append "<br/>" . T.pack . show) turtles
+            html (mconcat [text
+                          ,"<br/>"
+                          ,T.pack (show sess)
+                          ,"<br/>"
+                          ,userStr])
+     get "/allColors" $
+         do colors <- runQuery getAllTurtleColors
+            html (foldMap (T.append "<br/>" . T.pack . show) colors)
 
 serve :: Int -> IO ()
 serve port = do
-  connInfo <- loadConnInfo "db.cfg"
-  runSpock port (spock (spockCfg connInfo) myapp)
+    connInfo <- loadConnInfo "db.cfg"
+    conn <- PG.connect connInfo
+    initUserBackend conn
+    housekeepBackend conn
+    runSpock port (spock (spockCfg connInfo) myapp)
   where
     -- spockCfg :: PG.ConnectInfo -> SpockCfg
     spockCfg connInfo =
@@ -131,5 +202,5 @@ lucid :: Html () -> SpockAction conn sess state ()
 lucid = html . TL.toStrict . renderText
 
 layout :: Html () -> Html ()
-layout x =  doctypehtml_ $ 
+layout x =  doctypehtml_ $
             do body_ x
