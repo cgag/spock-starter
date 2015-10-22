@@ -3,31 +3,34 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 -- For lucid
 {-# LANGUAGE FlexibleContexts    #-}
+-- HVect
+{-# LANGUAGE DataKinds    #-}
 
 module App
     ( serve
     ) where
 
 import           BasePrelude
-import qualified Data.Configurator                  as C
 import           Data.Text                          (Text)
+import qualified Data.Configurator                  as C
 import qualified Data.Text                          as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Encoding                          as T
-import Lucid
+import qualified Data.Time as Time
 import qualified Database.PostgreSQL.Simple         as PG
 import qualified Database.PostgreSQL.Simple.ToField as PG
 import qualified Database.PostgreSQL.Simple.ToRow   as PG
 import qualified Database.PostgreSQL.Simple.FromRow   as PG
 import qualified Database.PostgreSQL.Simple.FromField   as PG
-import Network.Wai.Middleware.Static (staticPolicy, addBase)
-import  Web.Spock.Safe hiding (SessionId) -- why does this exist?
-import Web.Users.Types (User(..))
 import qualified  Web.Users.Types as U
-import  Web.Users.Postgresql () -- instances for web.users.types
-import qualified Data.Time as Time
+import Lucid
+import Network.Wai.Middleware.Static (staticPolicy, addBase)
+import Web.Spock.Safe hiding (SessionId) -- why does this exist?
+import Web.Users.Types (User(..))
+import Web.Users.Postgresql () -- instances for web.users.types
 import Control.Monad.Trans (liftIO, lift)
 import Control.Monad.Trans.Maybe (runMaybeT, MaybeT(..))
+import Data.HVect
 
 type AppUser = User (Maybe Integer)
 
@@ -90,78 +93,79 @@ mkConnBuilder connInfo =
 myapp :: SpockM PG.Connection (Maybe U.SessionId) () ()
 myapp =
   do middleware (staticPolicy (addBase "public"))
-     get root (lucid $ layout $
-         do p_ "hello"
-            p_ "world")
+     prehook initHook $
+       do get root (lucid $ layout $
+            do p_ "hello"
+               p_ "world")
 
-     get "/init" $
-         do void $ runQuery insertCurtis
-            html "hello"
+          get "/init" $
+            do void $ runQuery insertCurtis
+               html "hello"
 
-     get "/login" (lucid $ layout $
-         form_ [method_ "post", action_ "/login"] $
-            do label_ [Lucid.for_ "email"] "email"
-               input_ [type_ "text", name_ "email"]
-               label_ [Lucid.for_ "pass"] "pass"
-               input_ [type_ "password", name_ "pass"]
-               input_ [type_ "submit"])
+          get "/login" (lucid $ layout $
+            form_ [method_ "post", action_ "/login"] $
+               do label_ [Lucid.for_ "email"] "email"
+                  input_ [type_ "text", name_ "email"]
+                  label_ [Lucid.for_ "pass"] "pass"
+                  input_ [type_ "password", name_ "pass"]
+                  input_ [type_ "submit"])
 
-     post "/login" $
-          do email <- param' "email"
-             pass  <- param' "pass"
-             mSessID <- runQuery (\conn -> do
-               -- 1000 days.  Really need a package for these stupid multiplications
-               U.authUser conn email (U.PasswordPlain pass) (3600 * 24 * 1000))
-             msg <- case mSessID of
-                 Just sid -> do writeSession (Just sid)
-                                return ("Created session: " <> show sid)
-                 Nothing  -> return "Failed to create session"
-             lucid (toHtml msg)
+          post "/login" $
+              do email <- param' "email"
+                 pass  <- param' "pass"
+                 mSessID <- runQuery (\conn -> do
+                   -- 1000 days.  Really need a package for these stupid multiplications
+                   U.authUser conn email (U.PasswordPlain pass) (3600 * 24 * 1000))
+                 msg <- case mSessID of
+                     Just sid -> do writeSession (Just sid)
+                                    return ("Created session: " <> show sid)
+                     Nothing  -> return "Failed to create session"
+                 lucid (toHtml msg)
 
-     get "/register" (lucid $ layout $
-         form_ [method_ "post", action_ "/register"] $
-            do label_ [Lucid.for_ "email"] "email"
-               input_ [type_ "text", name_ "email"]
-               label_ [Lucid.for_ "pass"] "pass"
-               input_ [type_ "password", name_ "pass"]
-               input_ [type_ "submit"])
+          get "/register" (lucid $ layout $
+               form_ [method_ "post", action_ "/register"] $
+                  do label_ [Lucid.for_ "email"] "email"
+                     input_ [type_ "text", name_ "email"]
+                     label_ [Lucid.for_ "pass"] "pass"
+                     input_ [type_ "password", name_ "pass"]
+                     input_ [type_ "submit"])
 
-     post "/register" $
-          do email <- param' "email"
-             pass  <- param' "pass"
-             let user = User { u_name  = email
-                             , u_email = email
-                             , u_password = U.makePassword (U.PasswordPlain pass)
-                             , u_active = True
-                             , u_more   = Nothing :: Maybe Integer
-                             }
-             eErrUID <- runQuery (`U.createUser` user)
-             -- why can't i use a let here?
-             lucid $ layout $ p_ (toHtml $ case eErrUID of
-                Left e -> case e of
-                    U.UsernameOrEmailAlreadyTaken -> "Email is in use"
-                    U.InvalidPassword -> "Invalid password"
-                Right uid -> "Successfully created user: " <> show uid)
+          post "/register" $
+              do email <- param' "email"
+                 pass  <- param' "pass"
+                 let user = User { u_name  = email
+                                 , u_email = email
+                                 , u_password = U.makePassword (U.PasswordPlain pass)
+                                 , u_active = True
+                                 , u_more   = Nothing :: Maybe Integer
+                                 }
+                 eErrUID <- runQuery (`U.createUser` user)
+                 -- why can't i use a let here?
+                 lucid $ layout $ p_ (toHtml $ case eErrUID of
+                    Left e -> case e of
+                        U.UsernameOrEmailAlreadyTaken -> "Email is in use"
+                        U.InvalidPassword -> "Invalid password"
+                    Right uid -> "Successfully created user: " <> show uid)
 
-     get "/all" $
-         do mUserStr <- runMaybeT $ 
-              do sessId <- MaybeT readSession
-                 uid <- MaybeT $ runQuery (\conn -> U.verifySession conn sessId 0)
-                            -- should make a newtype or alias for our concrete
-                               -- user type. If getUserById fails to parse the more field,
-                               -- we jsut get nothing here.
-                 user :: AppUser <- MaybeT $ runQuery (`U.getUserById` uid) 
-                 return (T.pack . show $ user)
-            let userStr = fromMaybe "no user" mUserStr
-            turtles <- runQuery getAllTurtles
-            let text = foldMap (T.append "<br/>" . T.pack . show) turtles
-            html (mconcat [text
-                          ,"<br/>"
-                          ,userStr])
+          get "/all" $
+             do mUserStr <- runMaybeT $ 
+                  do sessId <- MaybeT readSession
+                     uid <- MaybeT $ runQuery (\conn -> U.verifySession conn sessId 0)
+                                -- should make a newtype or alias for our concrete
+                                   -- user type. If getUserById fails to parse the more field,
+                                   -- we jsut get nothing here.
+                     user :: AppUser <- MaybeT $ runQuery (`U.getUserById` uid) 
+                     return (T.pack . show $ user)
+                let userStr = fromMaybe "no user" mUserStr
+                turtles <- runQuery getAllTurtles
+                let text = foldMap (T.append "<br/>" . T.pack . show) turtles
+                html (mconcat [text
+                              ,"<br/>"
+                              ,userStr])
 
-     get "/allColors" $
-         do colors <- runQuery getAllTurtleColors
-            html (foldMap (T.append "<br/>" . T.pack . show) colors)
+          get "/allColors" $
+             do colors <- runQuery getAllTurtleColors
+                html (foldMap (T.append "<br/>" . T.pack . show) colors)
 
 serve :: Int -> IO ()
 serve port = do
@@ -196,9 +200,12 @@ insertCurtis conn =
                  "insert into turtles (name, color) values (?,?)"
                  [Turtle "Raphael" Red, Turtle "Leonardo" Blue]
 
-lucid :: Html () -> SpockAction conn sess state ()
+lucid :: Html () -> SpockActionCtx ctx conn sess state ()
 lucid = html . TL.toStrict . renderText
 
 layout :: Html () -> Html ()
 layout x =  doctypehtml_ $
             do body_ x
+
+initHook :: (Monad m) => ActionCtxT () m (HVect '[])
+initHook = return HNil
