@@ -25,6 +25,7 @@ library
                     ,  Spock >= 0.9
                     ,  text
                     ,  time
+                    ,  transformers
                     ,  users
                     ,  users-postgresql-simple
                     ,  wai-middleware-static
