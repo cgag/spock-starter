@@ -4,35 +4,44 @@
 -- For lucid
 {-# LANGUAGE FlexibleContexts    #-}
 -- HVect
-{-# LANGUAGE DataKinds    #-}
+{-# LANGUAGE DataKinds           #-}
+{-# LANGUAGE TypeOperators       #-}
 
 module App
     ( serve
     ) where
 
 import           BasePrelude
-import           Data.Text                          (Text)
-import qualified Data.Configurator                  as C
-import qualified Data.Text                          as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Encoding                          as T
-import qualified Data.Time as Time
-import qualified Database.PostgreSQL.Simple         as PG
-import qualified Database.PostgreSQL.Simple.ToField as PG
-import qualified Database.PostgreSQL.Simple.ToRow   as PG
-import qualified Database.PostgreSQL.Simple.FromRow   as PG
-import qualified Database.PostgreSQL.Simple.FromField   as PG
-import qualified  Web.Users.Types as U
-import Lucid
-import Network.Wai.Middleware.Static (staticPolicy, addBase)
-import Web.Spock.Safe hiding (SessionId) -- why does this exist?
-import Web.Users.Types (User(..))
-import Web.Users.Postgresql () -- instances for web.users.types
-import Control.Monad.Trans (liftIO, lift)
-import Control.Monad.Trans.Maybe (runMaybeT, MaybeT(..))
-import Data.HVect
+import           Control.Monad.Trans                  (lift, liftIO)
+import           Control.Monad.Trans.Maybe            (MaybeT (..), runMaybeT)
+import qualified Data.Configurator                    as C
+import           Data.Text                            (Text)
+import qualified Data.Text                            as T
+import qualified Data.Text.Encoding                   as T
+import qualified Data.Text.Lazy                       as TL
+import qualified Data.Time                            as Time
 
-type AppUser = User (Maybe Integer)
+import           Data.HVect
+import qualified Database.PostgreSQL.Simple           as PG
+import qualified Database.PostgreSQL.Simple.FromField as PG
+import qualified Database.PostgreSQL.Simple.FromRow   as PG
+import qualified Database.PostgreSQL.Simple.ToField   as PG
+import qualified Database.PostgreSQL.Simple.ToRow     as PG
+import qualified Network.HTTP.Types.Status as HTTP
+import           Lucid
+import           Network.Wai.Middleware.Static        (addBase, staticPolicy)
+import           Web.Spock.Safe                       hiding (SessionId)
+import           Web.Users.Postgresql                 ()
+import           Web.Users.Types                      (User (..))
+import qualified Web.Users.Types                      as U
+
+type AppState = ()
+type AppUser   = User (Maybe Integer)
+type AppAction ctx a = SpockActionCtx ctx
+                                      PG.Connection 
+                                      (Maybe U.SessionId) 
+                                      AppState
+                                      a
 
 data Turtle = Turtle
     { t_name  :: Text
@@ -147,25 +156,22 @@ myapp =
                         U.InvalidPassword -> "Invalid password"
                     Right uid -> "Successfully created user: " <> show uid)
 
+          get "/allColors" $
+             do colors <- runQuery getAllTurtleColors
+                html (foldMap (T.append "<br/>" . T.pack . show) colors)
+          
           get "/all" $
-             do mUserStr <- runMaybeT $ 
-                  do sessId <- MaybeT readSession
-                     uid <- MaybeT $ runQuery (\conn -> U.verifySession conn sessId 0)
-                                -- should make a newtype or alias for our concrete
-                                   -- user type. If getUserById fails to parse the more field,
-                                   -- we jsut get nothing here.
-                     user :: AppUser <- MaybeT $ runQuery (`U.getUserById` uid) 
-                     return (T.pack . show $ user)
-                let userStr = fromMaybe "no user" mUserStr
+             do mUser <- getUserFromSession
+                let userStr = maybe "no user" (T.pack . show) mUser
                 turtles <- runQuery getAllTurtles
                 let text = foldMap (T.append "<br/>" . T.pack . show) turtles
                 html (mconcat [text
                               ,"<br/>"
                               ,userStr])
 
-          get "/allColors" $
-             do colors <- runQuery getAllTurtleColors
-                html (foldMap (T.append "<br/>" . T.pack . show) colors)
+          prehook authHook $
+            do get "/protected" $ text "only logged in users should see this"
+
 
 serve :: Int -> IO ()
 serve port = do
@@ -209,3 +215,21 @@ layout x =  doctypehtml_ $
 
 initHook :: (Monad m) => ActionCtxT () m (HVect '[])
 initHook = return HNil
+
+-- TODO(cgag): this should an intended route before redirecting
+-- to login, then login should redirect to that intended route.
+authHook :: AppAction (HVect xs) (HVect (AppUser ': xs))
+authHook = 
+  do oldCtx <- getContext
+     mUser  <- getUserFromSession
+     case mUser of
+       Nothing   -> redirect "/login"
+       Just user -> return (user :&: oldCtx)
+
+getUserFromSession :: AppAction ctx (Maybe AppUser)
+getUserFromSession = 
+  runMaybeT $
+  do sessId <- MaybeT readSession
+     uid    <- MaybeT $ runQuery (\conn -> U.verifySession conn sessId 0)
+     user   <- MaybeT $ runQuery (`U.getUserById` uid)
+     return user
