@@ -18,6 +18,7 @@ library
   exposed-modules:     App
   build-depends:       base >= 4.7 && < 5
                     ,  base-prelude
+                    ,  aeson
                     ,  configurator
                     ,  http-types
                     ,  hvect

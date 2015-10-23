@@ -14,6 +14,7 @@ module App
 import           BasePrelude
 import           Control.Monad.Trans                  (lift, liftIO)
 import           Control.Monad.Trans.Maybe            (MaybeT (..), runMaybeT)
+import Data.Aeson (ToJSON(..), (.=), object)
 import qualified Data.Configurator                    as C
 import           Data.Text                            (Text)
 import qualified Data.Text                            as T
@@ -49,6 +50,10 @@ data Turtle = Turtle
     } deriving Show
 
 data Color = Red | Blue | Orange | Purple deriving Show
+
+instance ToJSON Turtle where
+  toJSON (Turtle {t_name=name, t_color=color}) =
+    object ["name" .= name, "color" .= (T.toLower . T.pack . show) color]
 
 instance PG.FromField Color where
   fromField f mdata =
@@ -122,11 +127,11 @@ myapp =
           post "/login" $
               do email <- param' "email"
                  pass  <- param' "pass"
-                 mSessID <- runQuery (\conn -> do
-                   -- 1000 days.  Really need a package for these stupid multiplications
-                   U.authUser conn email (U.PasswordPlain pass) (3600 * 24 * 1000))
+                 mSessID <- runQuery (\conn -> 
+                    do -- 1000 days.  Really need a package for these stupid multiplications
+                       U.authUser conn email (U.PasswordPlain pass) (3600 * 24 * 1000))
                  msg <- case mSessID of
-                     Just sid -> do writeSession (Just sid)
+                     Just sid -> do writeSession (Just sid) -- does this even do anything? (Yes, it writes to a stm-map in memory)
                                     return ("Created session: " <> show sid)
                      Nothing  -> return "Failed to create session"
                  lucid (toHtml msg)
@@ -171,6 +176,10 @@ myapp =
 
           prehook authHook $
             do get "/protected" $ text "only logged in users should see this"
+
+               get "/allJSON" $
+                  do ts <- runQuery getAllTurtles
+                     json ts
 
 
 serve :: Int -> IO ()
