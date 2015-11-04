@@ -52,57 +52,57 @@ data Turtle = Turtle
 data Color = Red | Blue | Orange | Purple deriving Show
 
 instance ToJSON Turtle where
-  toJSON (Turtle {t_name=name, t_color=color}) =
-    object ["name" .= name, "color" .= (T.toLower . T.pack . show) color]
+    toJSON (Turtle {t_name=name, t_color=color}) =
+        object ["name" .= name, "color" .= (T.toLower . T.pack . show) color]
 
 instance PG.FromField Color where
-  fromField f mdata =
-    case mdata of
-      Nothing -> PG.returnError PG.UnexpectedNull f ""
-      Just b  -> case T.decodeUtf8 b of
-        "RED"    -> return Red
-        "BLUE"   -> return Blue
-        "ORANGE" -> return Orange
-        "PURPLE" -> return Purple
-        _ -> error "invalid color"
+    fromField f mdata =
+      case mdata of
+          Nothing -> PG.returnError PG.UnexpectedNull f ""
+          Just b  -> case T.decodeUtf8 b of
+              "RED"    -> return Red
+              "BLUE"   -> return Blue
+              "ORANGE" -> return Orange
+              "PURPLE" -> return Purple
+              _ -> error "invalid color"
 
 instance PG.FromRow Color where
-  fromRow = PG.field
+    fromRow = PG.field
 
 instance PG.ToField Color where
-  toField Red    = PG.toField ("RED"    :: Text)
-  toField Blue   = PG.toField ("BLUE"   :: Text)
-  toField Orange = PG.toField ("ORANGE" :: Text)
-  toField Purple = PG.toField ("PURPLE" :: Text)
+    toField Red    = PG.toField ("RED"    :: Text)
+    toField Blue   = PG.toField ("BLUE"   :: Text)
+    toField Orange = PG.toField ("ORANGE" :: Text)
+    toField Purple = PG.toField ("PURPLE" :: Text)
 
 instance PG.ToRow Turtle where
-  toRow (Turtle name color) =
-    PG.toRow (name, color)
+    toRow (Turtle name color) =
+        PG.toRow (name, color)
 
 instance PG.FromRow Turtle where
-  fromRow = Turtle <$> PG.field <*> PG.field
+    fromRow = Turtle <$> PG.field <*> PG.field
 
 loadConnInfo :: FilePath -> IO PG.ConnectInfo
 loadConnInfo fpath = do
-  dbCfg <- C.load [C.Required fpath]
-  PG.ConnectInfo <$> C.require dbCfg "host"
-                 <*> C.require dbCfg "port"
-                 <*> C.require dbCfg "user"
-                 <*> C.require dbCfg "pass"
-                 <*> C.require dbCfg "db"
+    dbCfg <- C.load [C.Required fpath]
+    PG.ConnectInfo <$> C.require dbCfg "host"
+                   <*> C.require dbCfg "port"
+                   <*> C.require dbCfg "user"
+                   <*> C.require dbCfg "pass"
+                   <*> C.require dbCfg "db"
 
 mkConnBuilder :: PG.ConnectInfo -> ConnBuilder PG.Connection
 mkConnBuilder connInfo =
-  ConnBuilder { cb_createConn = PG.connect connInfo
-              , cb_destroyConn = PG.close
-              , cb_poolConfiguration =
-                -- TODO(cgag): figure out if these are reasonable values,
-                -- don't know anything about striping.  Not sure how long
-                -- we should keep a connection open either.
-                PoolCfg { pc_stripes = 1
-                        , pc_resPerStripe = 5
-                        , pc_keepOpenTime = 60 }
-              }
+    ConnBuilder { cb_createConn = PG.connect connInfo
+                , cb_destroyConn = PG.close
+                , cb_poolConfiguration =
+                  -- TODO(cgag): figure out if these are reasonable values,
+                  -- don't know anything about striping.  Not sure how long
+                  -- we should keep a connection open either.
+                  PoolCfg { pc_stripes = 1
+                          , pc_resPerStripe = 5
+                          , pc_keepOpenTime = 60 }
+                }
 
 myapp :: SpockM PG.Connection (Maybe U.SessionId) () ()
 myapp =
@@ -131,7 +131,7 @@ myapp =
                     do -- 1000 days.  Really need a package for these stupid multiplications
                        U.authUser conn email (U.PasswordPlain pass) (3600 * 24 * 1000))
                  msg <- case mSessID of
-                     Just sid -> do writeSession (Just sid) -- does this even do anything? (Yes, it writes to a stm-map in memory)
+                     Just sid -> do writeSession (Just sid)
                                     return ("Created session: " <> show sid)
                      Nothing  -> return "Failed to create session"
                  lucid (toHtml msg)
@@ -142,11 +142,17 @@ myapp =
                      input_ [type_ "text", name_ "email"]
                      label_ [Lucid.for_ "pass"] "pass"
                      input_ [type_ "password", name_ "pass"]
+                     label_ [Lucid.for_ "pass_confirm"] "password confirmation"
+                     input_ [type_ "password", name_ "pass_confirm"]
                      input_ [type_ "submit"])
 
           post "/register" $
-              do email <- param' "email"
-                 pass  <- param' "pass"
+              do email       <- param' "email"
+                 pass        <- param' "pass"
+                 passConfirm <- param' "pass_confirm"
+                 when (pass /= passConfirm) $
+                   -- TODO(cgag): flash message with error
+                   redirect "/register" 
                  let user = User { u_name  = email
                                  , u_email = email
                                  , u_password = U.makePassword (U.PasswordPlain pass)
@@ -220,7 +226,14 @@ lucid = html . TL.toStrict . renderText
 
 layout :: Html () -> Html ()
 layout x =  doctypehtml_ $
-            do body_ x
+            do body_  $
+                 do nav
+                    x
+  where
+    nav = ul_ $
+            do li_ (a_ [href_ "/"] "home")
+               li_ (a_ [href_ "/login"] "login")
+               li_ (a_ [href_ "/register"] "register")
 
 initHook :: (Monad m) => ActionCtxT () m (HVect '[])
 initHook = return HNil
@@ -232,8 +245,8 @@ authHook =
   do oldCtx <- getContext
      mUser  <- getUserFromSession
      case mUser of
-       Nothing   -> redirect "/login"
-       Just user -> return (user :&: oldCtx)
+         Nothing   -> redirect "/login"
+         Just user -> return (user :&: oldCtx)
 
 getUserFromSession :: AppAction ctx (Maybe AppUser)
 getUserFromSession = 
