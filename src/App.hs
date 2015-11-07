@@ -12,7 +12,6 @@ module App
     ) where
 
 import           BasePrelude
-import           Control.Monad.Trans                  (lift, liftIO)
 import           Control.Monad.Trans.Maybe            (MaybeT (..), runMaybeT)
 import Data.Aeson (ToJSON(..), (.=), object)
 import qualified Data.Configurator                    as C
@@ -20,7 +19,6 @@ import           Data.Text                            (Text)
 import qualified Data.Text                            as T
 import qualified Data.Text.Encoding                   as T
 import qualified Data.Text.Lazy                       as TL
-import qualified Data.Time                            as Time
 
 import           Data.HVect
 import qualified Database.PostgreSQL.Simple           as PG
@@ -28,7 +26,6 @@ import qualified Database.PostgreSQL.Simple.FromField as PG
 import qualified Database.PostgreSQL.Simple.FromRow   as PG
 import qualified Database.PostgreSQL.Simple.ToField   as PG
 import qualified Database.PostgreSQL.Simple.ToRow     as PG
-import qualified Network.HTTP.Types.Status as HTTP
 import           Lucid
 import           Network.Wai.Middleware.Static        (addBase, staticPolicy)
 import           Web.Spock.Safe                       hiding (SessionId)
@@ -53,7 +50,9 @@ data Color = Red | Blue | Orange | Purple deriving Show
 
 instance ToJSON Turtle where
     toJSON (Turtle {t_name=name, t_color=color}) =
-        object ["name" .= name, "color" .= (T.toLower . T.pack . show) color]
+        object [ "name" .= name
+               , "color" .= (T.toLower . T.pack . show) color
+               ]
 
 instance PG.FromField Color where
     fromField f mdata =
@@ -136,6 +135,13 @@ myapp =
                      Nothing  -> return "Failed to create session"
                  lucid (toHtml msg)
 
+          get "/logout" $
+              do mSessId <- readSession
+                 maybe (text "not logged in")
+                       (\sessId -> do runQuery (`U.destroySession` sessId)
+                                      redirect "/")
+                       mSessId
+
           get "/register" (lucid $ layout $
                form_ [method_ "post", action_ "/register"] $
                   do label_ [Lucid.for_ "email"] "email"
@@ -175,8 +181,8 @@ myapp =
              do mUser <- getUserFromSession
                 let userStr = maybe "no user" (T.pack . show) mUser
                 turtles <- runQuery getAllTurtles
-                let text = foldMap (T.append "<br/>" . T.pack . show) turtles
-                html (mconcat [text
+                let ret = foldMap (T.append "<br/>" . T.pack . show) turtles
+                html (mconcat [ret
                               ,"<br/>"
                               ,userStr])
 
@@ -226,9 +232,9 @@ lucid = html . TL.toStrict . renderText
 
 layout :: Html () -> Html ()
 layout x =  doctypehtml_ $
-            do body_  $
-                 do nav
-                    x
+                body_  $
+                  do nav
+                     x
   where
     nav = ul_ $
             do li_ (a_ [href_ "/"] "home")
